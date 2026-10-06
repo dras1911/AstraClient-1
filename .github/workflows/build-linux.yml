@@ -1,0 +1,98 @@
+name: Build Linux
+
+# Hermes: build klienta na Linux (ubuntu-22.04).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Linux (x64)
+    runs-on: ubuntu-22.04
+
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg_cache
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake gcc g++ pkg-config autoconf libtool libglew-dev xorg-dev libgl1-mesa-dev libglu1-mesa-dev ccache
+
+      - name: Get latest CMake
+        uses: lukka/get-cmake@v4.3.2
+
+      - name: Create vcpkg binary cache directory
+        run: mkdir -p "${{ github.workspace }}/vcpkg_cache"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-bincache-linux-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-bincache-linux-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-bincache-linux-
+
+      - name: Setup vcpkg
+        run: |
+          if [ ! -d vcpkg ]; then git clone https://github.com/microsoft/vcpkg vcpkg; fi
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Configure (CMake + vcpkg x64-linux)
+        run: |
+          set -o pipefail
+          cmake -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            2>&1 | tee cmake_configure.log
+          tail -40 cmake_configure.log
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build --parallel $(nproc) 2>&1 | tee build.log
+          tail -30 build.log
+
+      - name: Check binary + libs
+        run: |
+          ls -la build/ | head -30
+          echo "--- ldd:"
+          ldd build/AstraClient | head -40 || true
+
+      - name: Upload artifact (binary + shared libs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: astraclient-linux-x64-${{ github.sha }}
+          path: |
+            build/AstraClient
+            build/*.so*
+          if-no-files-found: warn
+
+      - name: Upload logs (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-linux-${{ github.sha }}
+          path: |
+            cmake_configure.log
+            build.log
+          if-no-files-found: ignore
+
+      - name: Save vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-bincache-linux-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
