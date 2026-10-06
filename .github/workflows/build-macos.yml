@@ -55,6 +55,7 @@ jobs:
 
       - name: Configure (CMake + vcpkg arm64-osx)
         run: |
+          set -o pipefail
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -70,6 +71,7 @@ jobs:
 
       - name: Build
         run: |
+          set -o pipefail
           cmake --build build --parallel $(sysctl -n hw.ncpu) 2>&1 | tee build.log
           tail -40 build.log
 
