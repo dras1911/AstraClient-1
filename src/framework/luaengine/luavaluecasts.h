@@ -70,8 +70,9 @@ inline int push_luavalue(uint64 v) { push_luavalue((double)v); return 1; }
 inline bool luavalue_cast(int index, uint64& v) { double d; bool r = luavalue_cast(index, d); v = d; return r; }
 
 // wasm32's size_t is unsigned long, which is distinct from both uint32 and
-// uint64 in libc++. Keep this target-specific overload out of native ABIs.
-#ifdef __EMSCRIPTEN__
+// uint64 in libc++. Apple's libc++ (macOS/iOS) has the same ABI split:
+// size_t is unsigned long while uint64 is unsigned long long.
+#if defined(__EMSCRIPTEN__) || defined(__APPLE__)
 inline int push_luavalue(unsigned long v)
 {
     push_luavalue((double)v);
