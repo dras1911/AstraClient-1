@@ -1,0 +1,104 @@
+name: Build macOS
+
+# Hermes: proba buildu klienta na macOS (GitHub Actions runner = bez lokalnego Maca).
+# Wymaga XQuartz (X11) - klient na macOS korzysta ze sciezki X11Window.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: macOS (arm64)
+    runs-on: macos-14
+
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg_cache
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XQuartz (X11) + tools
+        run: |
+          brew install --cask xquartz
+          echo "--- X11 headers:"
+          ls -la /opt/X11/include/X11/Xlib.h || true
+          ls -la /usr/X11/include/X11/Xlib.h || true
+          ls -la /usr/X11R6/include/X11/Xlib.h || true
+          brew install ccache || true
+
+      - name: Get latest CMake
+        uses: lukka/get-cmake@v4.3.2
+
+      - name: Create vcpkg binary cache directory
+        run: mkdir -p "${{ github.workspace }}/vcpkg_cache"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-bincache-macos-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-bincache-macos-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-bincache-macos-
+
+      - name: Setup vcpkg
+        run: |
+          if [ ! -d vcpkg ]; then git clone https://github.com/microsoft/vcpkg vcpkg; fi
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Configure (CMake + vcpkg arm64-osx)
+        run: |
+          cmake -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_C_FLAGS="-I/opt/X11/include" \
+            -DCMAKE_CXX_FLAGS="-I/opt/X11/include" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L/opt/X11/lib" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            2>&1 | tee cmake_configure.log
+          tail -60 cmake_configure.log
+
+      - name: Build
+        run: |
+          cmake --build build --parallel $(sysctl -n hw.ncpu) 2>&1 | tee build.log
+          tail -40 build.log
+
+      - name: Check binary
+        run: |
+          ls -la build/ | head -30
+          file build/AstraClient || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astraclient-macos-arm64-${{ github.sha }}
+          path: |
+            build/AstraClient
+          if-no-files-found: warn
+
+      - name: Upload logs (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-macos-${{ github.sha }}
+          path: |
+            cmake_configure.log
+            build.log
+            vcpkg/buildtrees/**/*.log
+          if-no-files-found: ignore
+
+      - name: Save vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-bincache-macos-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
